@@ -1,12 +1,54 @@
 import pandas as pd
 import joblib
 import os
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, confusion_matrix
+
+
+# ===============================
+# CONFUSION MATRIX HELPER
+# ===============================
+
+def plot_confusion_matrix(cm, title, filename):
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Reds",
+                xticklabels=["Predicted Legitimate", "Predicted Phishing"],
+                yticklabels=["Actual Legitimate", "Actual Phishing"],
+                annot_kws={"size": 22, "fontweight": "bold"},
+                linewidths=2, linecolor="white",
+                ax=ax)
+
+    ax.set_title(title, fontsize=15, fontweight="bold", pad=15)
+    ax.set_xlabel("Predicted Label", fontsize=12, labelpad=10)
+    ax.set_ylabel("True Label", fontsize=12, labelpad=10)
+    ax.tick_params(axis="both", labelsize=11)
+
+    legend_text = (
+        "Top-Left: True Legitimate — Predicted Legitimate AND it is NOT Phishing (Correct)\n"
+        "Top-Right: False Phishing — Predicted Phishing BUT it is NOT Phishing (Error)\n"
+        "Bottom-Left: False Legitimate — Predicted Legitimate BUT it is NOT Legitimate (Error)\n"
+        "Bottom-Right: True Phishing — Predicted Phishing AND it is NOT Legitimate (Correct)"
+    )
+
+    fig.text(0.5, -0.02, legend_text, ha="center", fontsize=9,
+             family="monospace",
+             bbox=dict(boxstyle="round,pad=0.5", facecolor="lightyellow",
+                       edgecolor="gray", alpha=0.9))
+
+    plt.tight_layout()
+    fig.savefig(filename, bbox_inches="tight", dpi=150)
+    plt.close()
+    print(f"Saved: {filename}")
 
 # Optional XGBoost
 try:
@@ -98,6 +140,10 @@ lr_preds = lr.predict(X_test)
 print("\nLogistic Regression Results:")
 print(classification_report(y_test, lr_preds))
 
+cm_lr = confusion_matrix(y_test, lr_preds)
+print("Confusion Matrix:\n", cm_lr)
+plot_confusion_matrix(cm_lr, "Confusion Matrix — Logistic Regression", "confusion_matrix_logistic_regression.png")
+
 joblib.dump(lr, "logistic_model.pkl")
 
 # ===============================
@@ -117,6 +163,10 @@ rf_preds = rf.predict(X_test)
 
 print("\nRandom Forest Results:")
 print(classification_report(y_test, rf_preds))
+
+cm_rf = confusion_matrix(y_test, rf_preds)
+print("Confusion Matrix:\n", cm_rf)
+plot_confusion_matrix(cm_rf, "Confusion Matrix — Random Forest", "confusion_matrix_random_forest.png")
 
 joblib.dump(rf, "random_forest_model.pkl")
 
@@ -144,3 +194,15 @@ else:
     print("\nXGBoost not installed — skipping.")
 
 print("\n✅ Training Complete. Models and scaler saved.")
+
+
+
+'''
+Top-Left (True Negative): Legitimate sites correctly identified.
+
+Bottom-Right (True Positive): Phishing sites correctly identified.
+
+Top-Right (False Positive): Legitimate sites incorrectly flagged as phishing.
+
+Bottom-Left (False Negative): Phishing sites that "slipped through" and were called legitimate.
+'''
