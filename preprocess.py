@@ -13,9 +13,6 @@ DATASET = "dataset_phishing.csv"
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 
-# These are the ONLY features that extract_features() in ai.py can compute.
-# Training must use exactly these columns — nothing more — to avoid
-# zero-padding mismatches at inference time.
 INFERENCE_FEATURES = [
     "length_url",
     "nb_dots",
@@ -32,75 +29,76 @@ INFERENCE_FEATURES = [
     "nb_subdomains",
 ]
 
-# ===============================
-# STEP 1 — LOAD
-# ===============================
 
+
+# LOAD
 print("=" * 50)
 print("STEP 1: Loading dataset")
 print("=" * 50)
 
 if not os.path.exists(DATASET):
-    raise FileNotFoundError(f"{DATASET} not found. Place it in the same directory.")
+    raise FileNotFoundError(f"{DATASET} not found.")
 
 df = pd.read_csv(DATASET)
 print(f"  Rows loaded       : {len(df)}")
 print(f"  Columns loaded    : {len(df.columns)}")
 
-# ===============================
-# STEP 2 — VALIDATE TARGET
-# ===============================
-
+# VALIDATE TARGET
 print("\nSTEP 2: Validating target column")
 
 if "status" not in df.columns:
     raise ValueError("Dataset must contain a 'status' column.")
 
-# Show raw values before encoding
 print(f"  Raw status values : {df['status'].unique().tolist()}")
 
-# Encode: 1 = phishing, 0 = legitimate
-# Handles both string labels and already-numeric labels
+#encoding
 if df["status"].dtype == object:
-    df["status"] = (df["status"].str.lower().str.strip() == "phishing").astype(int)
-    print("  Encoded string labels to 0/1")
+    df["status"] = df["status"].str.lower().str.strip()
+
+    valid_labels = {"phishing": 1, "legitimate": 0}
+    df["status"] = df["status"].map(valid_labels)
+
+    if df["status"].isna().sum() > 0:
+        raise ValueError("❌ Unknown labels found in 'status' column")
+
+    print("  Encoded string labels → 0 (legitimate), 1 (phishing)")
 else:
-    df["status"] = df["status"].astype(int)
-    print("  Status column already numeric — kept as-is")
+    df["status"] = df["status"].str.lower().str.strip()
+    df["status"] = df["status"].map({"legitimate": 0,"phishing": 1})
 
-y = df["status"]
+    if df["status"].isna().sum() > 0:
+         raise ValueError("Unknown values in status column")
+         print("  Status already numeric")
 
-# ===============================
-# STEP 3 — CHECK CLASS BALANCE
-# ===============================
+    print(f"  Encoded values     : {df['status'].unique().tolist()}")
+    y = df["status"]
 
+
+# CLASS BALANCE
 print("\nSTEP 3: Checking class balance")
 
 counts = y.value_counts()
 total = len(y)
+
 phishing_count = counts.get(1, 0)
 legit_count = counts.get(0, 0)
+
 ratio = max(phishing_count, legit_count) / max(min(phishing_count, legit_count), 1)
 
 print(f"  Legitimate (0)    : {legit_count} ({legit_count/total*100:.1f}%)")
 print(f"  Phishing   (1)    : {phishing_count} ({phishing_count/total*100:.1f}%)")
 print(f"  Imbalance ratio   : {ratio:.2f}:1")
 
-if ratio > 3.0:
-    print("  WARNING: Dataset is imbalanced (ratio > 3:1).")
-    print("           Add class_weight='balanced' to your models in train_models.py")
-    IMBALANCED = True
-else:
-    print("  Class balance is acceptable.")
-    IMBALANCED = False
+IMBALANCED = ratio > 3.0
 
-# Save flag so train_models.py can read it
+if IMBALANCED:
+    print("  ⚠ Dataset is imbalanced — use class_weight='balanced'")
+
 joblib.dump(IMBALANCED, "imbalanced_flag.pkl")
 
-# ===============================
-# STEP 4 — DROP NON-FEATURE COLUMNS
-# ===============================
 
+
+# DROPPING UNUSED COLUMNS
 print("\nSTEP 4: Dropping non-feature columns")
 
 cols_to_drop = ["status"]
@@ -108,13 +106,13 @@ if "url" in df.columns:
     cols_to_drop.append("url")
 
 df = df.drop(columns=cols_to_drop)
+
 print(f"  Dropped           : {cols_to_drop}")
 print(f"  Remaining columns : {len(df.columns)}")
 
-# ===============================
-# STEP 5 — HANDLE MISSING VALUES
-# ===============================
 
+
+# HANDLING MISSING VALUES
 print("\nSTEP 5: Handling missing values")
 
 null_counts = df.isnull().sum()
@@ -122,142 +120,99 @@ cols_with_nulls = null_counts[null_counts > 0]
 
 if len(cols_with_nulls) > 0:
     print(f"  Columns with nulls: {cols_with_nulls.to_dict()}")
-    # Impute numeric columns with column median (safer than drop for URL features)
+
     for col in cols_with_nulls.index:
         if df[col].dtype in [np.float64, np.int64]:
             median_val = df[col].median()
-            df[col].fillna(median_val, inplace=True)
+            df[col] = df[col].fillna(median_val)
             print(f"  Imputed '{col}' with median={median_val:.2f}")
         else:
-            df.drop(columns=[col], inplace=True)
-            print(f"  Dropped non-numeric column with nulls: '{col}'")
+            df = df.drop(columns=[col])
+            print(f"  Dropped non-numeric column: '{col}'")
 else:
-    print("  No missing values found.")
+    print("  No missing values")
 
-# ===============================
-# STEP 6 — ALIGN TO INFERENCE FEATURES
-# ===============================
 
-print("\nSTEP 6: Aligning features to inference feature set")
 
-missing_from_dataset = [f for f in INFERENCE_FEATURES if f not in df.columns]
-extra_in_dataset = [c for c in df.columns if c not in INFERENCE_FEATURES]
+# FEATURE ALIGNMENT
+print("\nSTEP 6: Aligning features")
 
-if missing_from_dataset:
-    print(f"  WARNING: These inference features are missing from dataset: {missing_from_dataset}")
-    print("           They will be filled with 0 — consider expanding extract_features() in ai.py")
-    for col in missing_from_dataset:
+missing = [f for f in INFERENCE_FEATURES if f not in df.columns]
+extra = [c for c in df.columns if c not in INFERENCE_FEATURES]
+
+if missing:
+    print(f"  Missing features → filling with 0: {missing}")
+    for col in missing:
         df[col] = 0
 
-print(f"  Dropping {len(extra_in_dataset)} extra training-only columns (not computable at inference)")
+print(f"  Dropping {len(extra)} extra columns")
+
 X = df[INFERENCE_FEATURES].copy()
 
-print(f"  Final feature count: {len(X.columns)}")
-print(f"  Features           : {X.columns.tolist()}")
+print(f"  Final features ({len(X.columns)}): {X.columns.tolist()}")
 
-# ===============================
-# STEP 7 — CLIP OUTLIERS
-# ===============================
 
+
+# CLIP OUTLIERS
 print("\nSTEP 7: Clipping outliers")
 
 clip_rules = {
-    "length_url"    : 500,
-    "nb_subdomains" : 10,
-    "nb_dots"       : 20,
-    "nb_slash"      : 30,
+    "length_url": 500,
+    "nb_subdomains": 10,
+    "nb_dots": 20,
+    "nb_slash": 30,
 }
 
 for col, upper in clip_rules.items():
     if col in X.columns:
-        before_max = X[col].max()
         X[col] = X[col].clip(upper=upper)
-        after_max = X[col].max()
-        if before_max != after_max:
-            print(f"  Clipped '{col}': max {before_max} -> {after_max}")
-        else:
-            print(f"  '{col}': no clipping needed (max={before_max})")
 
-# ===============================
-# STEP 8 — VERIFY NUMERIC DTYPES
-# ===============================
 
-print("\nSTEP 8: Verifying all features are numeric")
 
-non_numeric = X.select_dtypes(exclude=[np.number]).columns.tolist()
-if non_numeric:
-    print(f"  WARNING: Non-numeric columns found: {non_numeric}")
-    print("           Attempting conversion with pd.to_numeric...")
-    for col in non_numeric:
-        X[col] = pd.to_numeric(X[col], errors="coerce").fillna(0)
-    print("  Conversion complete.")
-else:
-    print("  All features are numeric — OK")
+# HANDING NUMERICS
+print("\nSTEP 8: Ensuring numeric features")
 
-# ===============================
-# STEP 9 — TRAIN / TEST SPLIT
-# ===============================
+for col in X.columns:
+    X[col] = pd.to_numeric(X[col], errors="coerce").fillna(0)
 
-print("\nSTEP 9: Stratified train/test split (80/20)")
+
+
+
+# TRAIN/TEST SPLIT
+print("\nSTEP 9: Train/Test split")
 
 X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
+    X, y,
     test_size=TEST_SIZE,
     random_state=RANDOM_STATE,
     stratify=y
 )
 
-print(f"  X_train shape : {X_train.shape}")
-print(f"  X_test  shape : {X_test.shape}")
-print(f"  y_train dist  : {y_train.value_counts().to_dict()}")
-print(f"  y_test  dist  : {y_test.value_counts().to_dict()}")
+print(f"  X_train: {X_train.shape}")
+print(f"  X_test : {X_test.shape}")
 
-# ===============================
-# STEP 10 — SCALE FEATURES
-# ===============================
 
-print("\nSTEP 10: Fitting StandardScaler on training data only")
+
+# SCALING METRICS
+print("\nSTEP 10: Scaling")
 
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)   # fit + transform on train
-X_test_scaled  = scaler.transform(X_test)         # transform only on test (no leakage)
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
-print("  Scaler fitted on X_train — X_test transformed without re-fitting")
-print(f"  Mean (first 3 features)  : {scaler.mean_[:3].round(4)}")
-print(f"  Std  (first 3 features)  : {scaler.scale_[:3].round(4)}")
 
-# ===============================
-# STEP 11 — SAVE ARTIFACTS
-# ===============================
+print("\nSTEP 11: Saving files")
 
-print("\nSTEP 11: Saving preprocessing artifacts")
-
-joblib.dump(scaler,           "scaler.pkl")
+joblib.dump(scaler, "scaler.pkl")
 joblib.dump(INFERENCE_FEATURES, "features.pkl")
-joblib.dump(X_train_scaled,   "X_train_scaled.pkl")
-joblib.dump(X_test_scaled,    "X_test_scaled.pkl")
-joblib.dump(y_train,          "y_train.pkl")
-joblib.dump(y_test,           "y_test.pkl")
+joblib.dump(X_train_scaled, "X_train_scaled.pkl")
+joblib.dump(X_test_scaled, "X_test_scaled.pkl")
+joblib.dump(y_train, "y_train.pkl")
+joblib.dump(y_test, "y_test.pkl")
 
-print("  Saved: scaler.pkl")
-print("  Saved: features.pkl  (use this in ai.py instead of scaler.feature_names_in_)")
-print("  Saved: X_train_scaled.pkl")
-print("  Saved: X_test_scaled.pkl")
-print("  Saved: y_train.pkl")
-print("  Saved: y_test.pkl")
-
-# ===============================
-# SUMMARY
-# ===============================
-
-print("\n" + "=" * 50)
+print("[+] All files saved")
 print("PREPROCESSING COMPLETE")
-print("=" * 50)
-print(f"  Final training samples : {X_train_scaled.shape[0]}")
-print(f"  Final test samples     : {X_test_scaled.shape[0]}")
-print(f"  Features used          : {len(INFERENCE_FEATURES)}")
-print(f"  Class imbalanced       : {IMBALANCED}")
-if IMBALANCED:
-    print("  ACTION NEEDED: Add class_weight='balanced' to models in train_models.py")
-print("\nRun train_models.py next — it will load the saved .pkl files.")
+
+
+
+
