@@ -5,10 +5,8 @@ import os
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-# ===============================
-# CONFIG
-# ===============================
 
+# CONFIG AND PRE-PARAMETERS
 DATASET = "dataset_phishing.csv"
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
